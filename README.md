@@ -52,31 +52,19 @@ Then it caches the key (`ssh-add`), verifies GitHub SSH, clones/installs init-fi
 curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host | bash
 ```
 
-### HTTPS / `gh` path
-
-```bash
-gh auth login
-curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host \
-  | bash -s -- --github-https
-```
-
 ### Flags
 
 | Flag | Meaning |
 | --- | --- |
 | `--key-from HOST` | scp house key from HOST (or `INIT_FILES_KEY_HOST`) |
 | `--no-dev` / `--dev` | forwarded to install |
-| `--github-https` / `--github-ssh` | GitHub transport |
+| `--github-https` / `--github-ssh` | GitHub transport (optional; default is SSH via the house key) |
 | `-f` / `--force` | install force; also re-fetch key if `--key-from` is set |
 | `-q` / `--quiet` | less output |
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host | bash -s -- --help
 ```
-
-## What this repo is
-
-Only the public bootstrap surface (`bootstrap_host` + this README). No private keys are stored here.
 
 ## Ownership
 
