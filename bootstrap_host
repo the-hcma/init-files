@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
 # bootstrap_host — new-host path from house SSH key (or gh HTTPS) to working init-files.
 #
-# Public entrypoint (this repo): inspect, then pipe to bash.
+# Preferred (public curl|bash — no prior clone required):
 #
 #   curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host | less
 #   curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host | bash
 #   curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host | bash -s -- --no-dev
 #
-# Still requires the house SSH key on the host (or --github-https + gh auth) to
-# clone the private repo thehcma/init-files. Canonical script also lives there;
-# this public copy is the curl|bash bootstrap surface.
+# Still needs the house SSH key on the host (or --github-https + gh auth) to clone
+# this private repo. Public mirror: https://github.com/the-hcma/init-files
 #
 # scp fallback from a working host:
 #   scp WORKING:~/.local/share/init-files/bootstrap_host /tmp/ && /tmp/bootstrap_host
+#
+# After clone exists, this script in the clone is idempotent (skip clone, re-run
+# install + verify). Keep the public mirror in sync when this file changes.
 #
 # See: https://github.com/thehcma/init-files/issues/12
 set -euo pipefail
@@ -66,7 +68,8 @@ Usage: bootstrap_host [-f|--force] [-q|--quiet] [--no-dev|--dev]
   HTTPS mode (--github-https / remembered github-https.<host> / gh auth):
     skip key/cache_ssh/ssh -T → clone via HTTPS → ./install --github-https → verify.
 
-  Private repo: copy this script from a working host (scp), do not curl|bash.
+  Preferred fetch (public mirror):
+    curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host | bash
 
   Flags are forwarded to ./install. Clone path: ~/.local/share/init-files
   (override with INIT_FILES_DIR).
@@ -120,6 +123,9 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# force is only forwarded via install_args; keep the flag for future local use.
+: "${force}"
 
 # Same host key as install / PS1: macOS ComputerName, else short hostname.
 _init_files_raw_host_label()
@@ -348,7 +354,8 @@ cache_house_key()
     fi
 
     log "Caching SSH key: $house_key (timeout: $ssh_cache_timeout)"
-    DISPLAY= SSH_ASKPASS= SSH_ASKPASS_REQUIRE=never "$ssh_add_cmd" -t "$ssh_cache_timeout" "$house_key" \
+    env -u DISPLAY -u SSH_ASKPASS SSH_ASKPASS_REQUIRE=never \
+        "$ssh_add_cmd" -t "$ssh_cache_timeout" "$house_key" \
         || die "ssh-add failed"
 }
 
