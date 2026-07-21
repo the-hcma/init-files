@@ -17,6 +17,7 @@
 #
 # See: https://github.com/thehcma/init-files/issues/12
 set -euo pipefail
+# bootstrap_host_rev=cdn-bust-2026-07-21
 
 clone_dir="${INIT_FILES_DIR:-$HOME/.local/share/init-files}"
 repo_https="${INIT_FILES_REPO_HTTPS:-https://github.com/thehcma/init-files.git}"

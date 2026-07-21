@@ -8,7 +8,7 @@ You need SSH access to a donor host that already has the house key (password log
 
 ```bash
 # 1) Download the script (preferred over curl|bash — clearer errors, no stale pipe)
-curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host \
+curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/839d6b1ed7f048ed6785f34d31d2ea780bc76ffc/bootstrap_host \
   -o /tmp/bootstrap_host
 chmod +x /tmp/bootstrap_host
 
@@ -61,7 +61,7 @@ HOST may be a short name, FQDN, or user@host. Env alternative: INIT_FILES_KEY_HO
 If a previous attempt already copied the key (common after a partial run):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host \
+curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/839d6b1ed7f048ed6785f34d31d2ea780bc76ffc/bootstrap_host \
   -o /tmp/bootstrap_host
 chmod +x /tmp/bootstrap_host
 /tmp/bootstrap_host
@@ -76,7 +76,7 @@ To re-fetch the key from the donor anyway: `/tmp/bootstrap_host --key-from HOST 
 Works if /dev/tty is available (normal interactive SSH/terminal):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host \
+curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/839d6b1ed7f048ed6785f34d31d2ea780bc76ffc/bootstrap_host \
   | bash -s -- --key-from HOST
 # after verify OK:
 source ~/.bashrc
@@ -122,10 +122,19 @@ Typical causes:
 Re-download bootstrap after upgrading OpenSSH or fixing the pubkey:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host \
+curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/839d6b1ed7f048ed6785f34d31d2ea780bc76ffc/bootstrap_host \
   -o /tmp/bootstrap_host
 chmod +x /tmp/bootstrap_host
 /tmp/bootstrap_host
+```
+
+### CDN note
+
+GitHub `raw.githubusercontent.com/.../main/...` can lag. Prefer the commit-pinned URL above, or:
+
+```bash
+gh api repos/the-hcma/init-files/contents/bootstrap_host --jq .content | base64 -d > /tmp/bootstrap_host
+chmod +x /tmp/bootstrap_host
 ```
 
 ## Ownership
