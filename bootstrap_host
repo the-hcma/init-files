@@ -303,18 +303,18 @@ ensure_ssh_config_include()
     log "Prepended Include config.d/*.conf to ~/.ssh/config"
 }
 
-# Embedded copy of ssh/config.github so this script can be scp'd alone.
+# Embedded copy of ssh/config.github — absolute IdentityFile (more reliable than ~).
 write_github_ssh_snippet()
 {
     mkdir -p "$ssh_config_d" || return 1
-    cat > "$ssh_github_snippet" <<'EOF'
+    cat > "$ssh_github_snippet" <<EOF
 # Managed by init-files bootstrap_host (mirrors ssh/config.github).
 # ./install may refresh this file from the clone.
 
 Host github.com
     HostName github.com
     User git
-    IdentityFile ~/.ssh/id_rsa-sha2-256-hcma-at-hcma-dot-info
+    IdentityFile ${house_key}
     IdentitiesOnly yes
     VisualHostKey no
 EOF
@@ -458,18 +458,58 @@ EOF
 
 verify_github_ssh()
 {
-    local out
+    local out verbose_tail fp ssh_ver effective_user
+    local -a ssh_opts
+
     log "Checking  ssh -T git@github.com …"
-    # GitHub prints "Hi user! ..." on stderr and exits 1 on success.
-    out=$(ssh -o BatchMode=yes -o ConnectTimeout=15 -T git@github.com 2>&1) || true
+
+    # Explicit User=git + IdentityFile so a broken Include / Host * User cannot break auth.
+    ssh_opts=(
+        -o "User=git"
+        -o "IdentitiesOnly=yes"
+        -o "IdentityFile=${house_key}"
+        -o "PreferredAuthentications=publickey"
+        -o "PubkeyAuthentication=yes"
+        -o "BatchMode=yes"
+        -o "ConnectTimeout=15"
+    )
+
+    out=$(ssh "${ssh_opts[@]}" -T git@github.com 2>&1) || true
     if printf '%s\n' "$out" | grep -qiE 'successfully authenticated|Hi .+!'; then
         log "OK       $out"
         return 0
     fi
-    printf '%s\n' "$out" >&2
-    die "GitHub SSH auth failed. Confirm the pubkey is on the GitHub account, then: ssh-add -t ${ssh_cache_timeout} ${house_key} && ssh -T git@github.com"
-}
 
+    printf '%s\n' "$out" >&2
+    fp=$(ssh-keygen -lf "$house_key" 2>/dev/null | awk '{print $1" "$2}' || true)
+    ssh_ver=$(ssh -V 2>&1 || true)
+    effective_user=$(ssh -G "${ssh_opts[@]}" git@github.com 2>/dev/null | awk '/^user /{print $2; exit}' || true)
+    verbose_tail=$(ssh -v "${ssh_opts[@]}" -T git@github.com 2>&1 | tail -n 25 || true)
+
+    cat >&2 <<EOF
+
+ERROR: GitHub SSH auth failed with the house key.
+
+  key:     $house_key
+  key fp:  ${fp:-unknown}
+  ssh:     ${ssh_ver:-unknown}
+  ssh -G user: ${effective_user:-unknown}  (must be "git")
+
+Common causes on older Linux (e.g. Rocky/CentOS):
+  • OpenSSH too old for GitHub's RSA SHA-2 signatures — upgrade:
+      $(openssh_client_install_hint)
+  • House pubkey not on the GitHub account that can read init-files
+      (Settings → SSH keys). Fingerprint above must match a key there.
+
+Debug on this host:
+  ssh-add -l
+  ssh -v -o User=git -o IdentitiesOnly=yes -i $house_key -T git@github.com
+
+ssh -v (tail):
+$verbose_tail
+EOF
+    exit 1
+}
 
 # Copy house key (+ optional .pub) from a donor host in one SSH auth (one password).
 fetch_house_key_from_host()
@@ -591,7 +631,13 @@ clone_repo_if_needed()
 
     mkdir -p "$(dirname "$clone_dir")" || die "cannot create $(dirname "$clone_dir")"
     log "Cloning  $repo_https -> $clone_dir"
-    git clone "$repo_https" "$clone_dir" || die "git clone failed"
+    # Force the same GitHub SSH identity as verify (do not rely on Include alone).
+    if [[ $github_https -eq 0 ]]; then
+        GIT_SSH_COMMAND="ssh -o User=git -o IdentitiesOnly=yes -o IdentityFile=${house_key}" \
+            git clone "$repo_https" "$clone_dir" || die "git clone failed"
+    else
+        git clone "$repo_https" "$clone_dir" || die "git clone failed"
+    fi
 }
 
 run_install()
