@@ -17,12 +17,15 @@
 #
 # See: https://github.com/thehcma/init-files/issues/12
 set -euo pipefail
-# bootstrap_host_rev=cdn-bust-2026-07-21
+# bootstrap_host_rev=ed25519-fallback-2026-07-21
 
 clone_dir="${INIT_FILES_DIR:-$HOME/.local/share/init-files}"
 repo_https="${INIT_FILES_REPO_HTTPS:-https://github.com/thehcma/init-files.git}"
 house_key="${HOME}/.ssh/id_rsa-sha2-256-hcma-at-hcma-dot-info"
 house_pub="${house_key}.pub"
+github_ed25519_key="${HOME}/.ssh/id_ed25519_github"
+# Selected GitHub identity after verify_github_ssh (absolute path).
+github_key=""
 ssh_dir="${HOME}/.ssh"
 ssh_config_d="${ssh_dir}/config.d"
 ssh_config_file="${ssh_dir}/config"
@@ -304,10 +307,41 @@ ensure_ssh_config_include()
     log "Prepended Include config.d/*.conf to ~/.ssh/config"
 }
 
-# Embedded copy of ssh/config.github — absolute IdentityFile (more reliable than ~).
+# OpenSSH < 8.5: PubkeyAcceptedKeyTypes; >= 8.5: PubkeyAcceptedAlgorithms.
+# Forcing rsa-sha2-* avoids RHEL crypto-policies offering only legacy ssh-rsa (SHA-1),
+# which GitHub rejects.
+github_ssh_rsa_sha2_opt()
+{
+    local major=0 minor=0
+    # ssh -V → OpenSSH_8.0p1, ...
+    if [[ "$(ssh -V 2>&1)" =~ OpenSSH_([0-9]+)\.([0-9]+) ]]; then
+        major="${BASH_REMATCH[1]}"
+        minor="${BASH_REMATCH[2]}"
+    fi
+    if (( major > 8 || (major == 8 && minor >= 5) )); then
+        printf '%s\n' "PubkeyAcceptedAlgorithms=rsa-sha2-512,rsa-sha2-256"
+    else
+        printf '%s\n' "PubkeyAcceptedKeyTypes=rsa-sha2-512,rsa-sha2-256"
+    fi
+}
+
+# Embedded GitHub Host block. Lists ed25519 + house RSA; order prefers github_key.
 write_github_ssh_snippet()
 {
+    local first second alg_line=""
+
     mkdir -p "$ssh_config_d" || return 1
+
+    if [[ "${github_key:-}" == "$house_key" ]]; then
+        first="$house_key"
+        second="$github_ed25519_key"
+        alg_line="    $(github_ssh_rsa_sha2_opt | sed 's/=/ /')"$'\n'
+    else
+        # Default / ed25519-preferred: ed25519 first (fixes OpenSSH 8.0+FIPS RSA-to-GitHub).
+        first="$github_ed25519_key"
+        second="$house_key"
+    fi
+
     cat > "$ssh_github_snippet" <<EOF
 # Managed by init-files bootstrap_host (mirrors ssh/config.github).
 # ./install may refresh this file from the clone.
@@ -315,9 +349,10 @@ write_github_ssh_snippet()
 Host github.com
     HostName github.com
     User git
-    IdentityFile ${house_key}
+    IdentityFile ${first}
+    IdentityFile ${second}
     IdentitiesOnly yes
-    VisualHostKey no
+${alg_line}    VisualHostKey no
 EOF
     chmod 600 "$ssh_github_snippet" || true
     log "Installed ${ssh_github_snippet/#$HOME/~}"
@@ -376,11 +411,14 @@ clear_github_ssh_insteadof()
     fi
 }
 
-# Minimal cache_ssh: agent + ssh-add -t (passphrase via /dev/tty when possible).
-cache_house_key()
+# Minimal cache_ssh: agent + ssh-add -t for one key (passphrase via /dev/tty when possible).
+cache_ssh_key()
 {
+    local key_path="$1"
+    local label="${2:-$key_path}"
     local ssh_add_cmd ssh_agent_cmd ssh_keygen_cmd env_file agent_rc fingerprint key_loaded tty_dev agent_out
 
+    [[ -f "$key_path" ]] || return 1
     require_openssh_client
 
     ssh_add_cmd="$(command -v ssh-add)"
@@ -431,14 +469,14 @@ EOF
 
     key_loaded=0
     if [[ -n "$ssh_keygen_cmd" ]]; then
-        fingerprint=$("$ssh_keygen_cmd" -lf "$house_key" 2>/dev/null | awk '{print $2}')
+        fingerprint=$("$ssh_keygen_cmd" -lf "$key_path" 2>/dev/null | awk '{print $2}')
         if [[ -n "$fingerprint" ]] && "$ssh_add_cmd" -l 2>/dev/null | grep -qF "$fingerprint"; then
             key_loaded=1
         fi
     fi
 
     if [[ $key_loaded -eq 1 ]]; then
-        log "OK       SSH key already cached: $house_key"
+        log "OK       SSH key already cached: $label"
         return 0
     fi
 
@@ -446,65 +484,99 @@ EOF
         die "passphrase required but no TTY; run from a real terminal (not a non-interactive pipe without /dev/tty)"
     fi
 
-    log "Caching SSH key: $house_key (timeout: $ssh_cache_timeout)"
+    log "Caching SSH key: $label (timeout: $ssh_cache_timeout)"
     log "         Enter the key passphrase when prompted."
-    # curl|bash leaves stdin as the script pipe — read passphrase from the TTY.
     if ! env -u DISPLAY -u SSH_ASKPASS SSH_ASKPASS_REQUIRE=never \
-        "$ssh_add_cmd" -t "$ssh_cache_timeout" "$house_key" <"$tty_dev"
+        "$ssh_add_cmd" -t "$ssh_cache_timeout" "$key_path" <"$tty_dev"
     then
-        die "ssh-add failed (wrong passphrase, or agent issue)"
+        die "ssh-add failed for $label (wrong passphrase, or agent issue)"
     fi
-    log "OK       house key cached in ssh-agent"
+    log "OK       cached in ssh-agent: $label"
 }
 
-verify_github_ssh()
+cache_house_key()
 {
-    local out verbose_tail fp ssh_ver effective_user
+    cache_ssh_key "$house_key" "$house_key"
+}
+
+# Try ssh -T with one IdentityFile. Prints Hi-line on success. Sets github_key.
+try_github_ssh_identity()
+{
+    local key_path="$1"
+    local out
     local -a ssh_opts
 
-    log "Checking  ssh -T git@github.com …"
+    [[ -f "$key_path" ]] || return 1
 
-    # Explicit User=git + IdentityFile so a broken Include / Host * User cannot break auth.
     ssh_opts=(
         -o "User=git"
         -o "IdentitiesOnly=yes"
-        -o "IdentityFile=${house_key}"
+        -o "IdentityFile=${key_path}"
         -o "PreferredAuthentications=publickey"
         -o "PubkeyAuthentication=yes"
         -o "BatchMode=yes"
         -o "ConnectTimeout=15"
     )
+    if [[ "$key_path" == "$house_key" ]]; then
+        ssh_opts+=(-o "$(github_ssh_rsa_sha2_opt)")
+    fi
 
     out=$(ssh "${ssh_opts[@]}" -T git@github.com 2>&1) || true
     if printf '%s\n' "$out" | grep -qiE 'successfully authenticated|Hi .+!'; then
+        github_key="$key_path"
         log "OK       $out"
+        log "OK       GitHub SSH via ${key_path/#$HOME/~}"
         return 0
     fi
+    return 1
+}
 
-    printf '%s\n' "$out" >&2
+verify_github_ssh()
+{
+    local verbose_tail fp ssh_ver
+
+    log "Checking  ssh -T git@github.com …"
+
+    # Prefer house RSA (policy); fall back to id_ed25519_github (needed on some
+    # OpenSSH 8.0 + FIPS hosts where GitHub declines the house RSA offer).
+    if try_github_ssh_identity "$house_key"; then
+        write_github_ssh_snippet
+        return 0
+    fi
+    log "WARN     house RSA declined by GitHub; trying ${github_ed25519_key/#$HOME/~} …"
+
+    if [[ -f "$github_ed25519_key" ]]; then
+        cache_ssh_key "$github_ed25519_key" "$github_ed25519_key" || true
+        if try_github_ssh_identity "$github_ed25519_key"; then
+            write_github_ssh_snippet
+            return 0
+        fi
+    fi
+
     fp=$(ssh-keygen -lf "$house_key" 2>/dev/null | awk '{print $1" "$2}' || true)
     ssh_ver=$(ssh -V 2>&1 || true)
-    effective_user=$(ssh -G "${ssh_opts[@]}" git@github.com 2>/dev/null | awk '/^user /{print $2; exit}' || true)
-    verbose_tail=$(ssh -v "${ssh_opts[@]}" -T git@github.com 2>&1 | tail -n 25 || true)
+    verbose_tail=$(ssh -v -o BatchMode=yes -o User=git -o IdentitiesOnly=yes \
+        -o "IdentityFile=${house_key}" -o "$(github_ssh_rsa_sha2_opt)" \
+        -T git@github.com 2>&1 | tail -n 25 || true)
 
     cat >&2 <<EOF
 
-ERROR: GitHub SSH auth failed with the house key.
+ERROR: GitHub SSH auth failed (house RSA and ed25519).
 
-  key:     $house_key
-  key fp:  ${fp:-unknown}
-  ssh:     ${ssh_ver:-unknown}
-  ssh -G user: ${effective_user:-unknown}  (must be "git")
+  house RSA: $house_key
+  key fp:    ${fp:-unknown}
+  ssh:       ${ssh_ver:-unknown}
+  ed25519:   ${github_ed25519_key} $([[ -f "$github_ed25519_key" ]] && echo present || echo MISSING)
 
-Common causes on older Linux (e.g. Rocky/CentOS):
-  • OpenSSH too old for GitHub's RSA SHA-2 signatures — upgrade:
-      $(openssh_client_install_hint)
-  • House pubkey not on the GitHub account that can read init-files
-      (Settings → SSH keys). Fingerprint above must match a key there.
+On OpenSSH 8.x + FIPS, GitHub often declines house RSA even when the pubkey is
+registered. Copy a working GitHub ed25519 key from saratoga, then re-run:
 
-Debug on this host:
-  ssh-add -l
-  ssh -v -o User=git -o IdentitiesOnly=yes -i $house_key -T git@github.com
+  scp hcma@saratoga:.ssh/id_ed25519_github{,.pub} ~/.ssh/
+  chmod 600 ~/.ssh/id_ed25519_github
+  ssh-add -t 4h ~/.ssh/id_ed25519_github
+  /tmp/bootstrap_host
+
+Or use HTTPS:  bootstrap_host --github-https
 
 ssh -v (tail):
 $verbose_tail
@@ -634,8 +706,15 @@ clone_repo_if_needed()
     log "Cloning  $repo_https -> $clone_dir"
     # Force the same GitHub SSH identity as verify (do not rely on Include alone).
     if [[ $github_https -eq 0 ]]; then
-        GIT_SSH_COMMAND="ssh -o User=git -o IdentitiesOnly=yes -o IdentityFile=${house_key}" \
-            git clone "$repo_https" "$clone_dir" || die "git clone failed"
+        local id="${github_key:-$github_ed25519_key}"
+        [[ -f "$id" ]] || id="$house_key"
+        if [[ "$id" == "$house_key" ]]; then
+            GIT_SSH_COMMAND="ssh -o User=git -o IdentitiesOnly=yes -o IdentityFile=${id} -o $(github_ssh_rsa_sha2_opt)" \
+                git clone "$repo_https" "$clone_dir" || die "git clone failed"
+        else
+            GIT_SSH_COMMAND="ssh -o User=git -o IdentitiesOnly=yes -o IdentityFile=${id}" \
+                git clone "$repo_https" "$clone_dir" || die "git clone failed"
+        fi
     else
         git clone "$repo_https" "$clone_dir" || die "git clone failed"
     fi
