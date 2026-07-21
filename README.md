@@ -1,53 +1,94 @@
 # init-files (bootstrap)
 
-Curl-friendly entrypoint for bootstrapping house shell config on a new machine.
+Entrypoint for bootstrapping house shell config on a new machine.
 
-## Quick start
+## Exact steps (new host)
 
-You need SSH access to a host that already has the house key (password login is fine for this one step). Point `--key-from` at that host:
+You need SSH access to a donor host that already has the house key (password login is fine once).
 
 ```bash
-# Inspect first (recommended):
-curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host | less
-
-# Fetch the house key from HOST (one password), then finish bootstrap:
+# 1) Download the script (preferred over curl|bash — clearer errors, no stale pipe)
 curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host \
-  | bash -s -- --key-from HOST
+  -o /tmp/bootstrap_host
+chmod +x /tmp/bootstrap_host
+
+# 2) Optional: inspect
+less /tmp/bootstrap_host
+
+# 3) Run — replace HOST (e.g. meerkat, saratoga, hcma@meerkat)
+/tmp/bootstrap_host --key-from HOST
+# minimal host:  /tmp/bootstrap_host --key-from HOST --no-dev
 ```
 
-Examples:
+Prompts (in order):
+
+1. SSH password (or key) to `HOST` — **once** (fetches the house key)
+2. Passphrase for the house key — **once** (`ssh-add`)
+
+Wait until you see the **`=== bootstrap_host verify ===`** block with `bashrc: … OK`.  
+**Only then** reload the shell:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host \
-  | bash -s -- --key-from meerkat
-
-curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host \
-  | bash -s -- --key-from hcma@saratoga --no-dev
-```
-
-`HOST` may be a short name, FQDN, or `user@host`. Equivalent env: `INIT_FILES_KEY_HOST=meerkat`.
-
-You will be prompted for:
-1. SSH password (or key) to `HOST` — once
-2. Passphrase for the house key — once (read from your terminal even under `curl | bash`)
-
-Then reload:
-
-```bash
+# 4) After verify succeeds:
 source ~/.bashrc
 ```
 
-### What `--key-from` does
+`source ~/.bashrc` before a successful verify does nothing useful — there is no symlink yet.
 
-Fetches `~/.ssh/id_rsa-sha2-256-hcma-at-hcma-dot-info` (+ `.pub` if present) from `HOST` in a **single** SSH session, starts `ssh-agent` if needed, caches the key, verifies GitHub SSH, clones/installs init-files, and prints a short verify summary. If the key is already on this host, fetch is skipped unless you pass `-f` / `--force`.
+### Confirm it worked
 
-Requires OpenSSH client tools (`ssh`, `ssh-add`, `ssh-agent`, `scp`). If they are missing, the script prints an install command for your distro.
+```bash
+ls -l ~/.bashrc
+# expect: ~/.bashrc -> …/init-files/bashrc
+
+ls -ld ~/.local/share/init-files/.git
+git -C ~/.local/share/init-files rev-parse --short HEAD
+type refresh_bashrc
+```
+
+### Examples
+
+```bash
+/tmp/bootstrap_host --key-from meerkat
+/tmp/bootstrap_host --key-from hcma@meerkat --no-dev
+/tmp/bootstrap_host --key-from hcma@saratoga
+```
+
+`HOST` may be a short name, FQDN, or `user@host`. Env alternative: `INIT_FILES_KEY_HOST=meerkat`.
 
 ### Key already on this host
 
+If a previous attempt already copied the key (common after a partial run):
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host | bash
+curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host \
+  -o /tmp/bootstrap_host
+chmod +x /tmp/bootstrap_host
+/tmp/bootstrap_host
+# then, after verify OK:
+source ~/.bashrc
 ```
+
+To re-fetch the key from the donor anyway: `/tmp/bootstrap_host --key-from HOST -f`
+
+### curl|bash alternative
+
+Works if `/dev/tty` is available (normal interactive SSH/terminal):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host \
+  | bash -s -- --key-from HOST
+# after verify OK:
+source ~/.bashrc
+```
+
+Downloading to `/tmp/bootstrap_host` is still preferred when debugging.
+
+### What `--key-from` does
+
+Fetches `~/.ssh/id_rsa-sha2-256-hcma-at-hcma-dot-info` (+ `.pub` if present) from `HOST` in one SSH session, starts `ssh-agent` if needed, caches the key, verifies GitHub SSH, clones/installs init-files under `~/.local/share/init-files`, and prints the verify summary.
+
+Requires OpenSSH client tools (`ssh`, `ssh-add`, `ssh-agent`, `scp`). If missing, the script prints a distro install command.
 
 ### Flags
 
@@ -60,7 +101,7 @@ curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_
 | `-q` / `--quiet` | less output |
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host | bash -s -- --help
+/tmp/bootstrap_host --help
 ```
 
 ## Ownership
