@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # bootstrap_host — new-host path from house SSH key (or gh HTTPS) to working init-files.
 #
-# Preferred (public curl|bash — no prior clone required):
+# Preferred (public bootstrap — no prior clone required):
 #
-#   curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host | less
-#   curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host | bash -s -- --key-from HOST
-#   curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host | bash -s -- --no-dev --key-from HOST
+#   curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host \
+#     -o /tmp/bootstrap_host && chmod +x /tmp/bootstrap_host
+#   /tmp/bootstrap_host --key-from HOST
+#   # after "bootstrap_host verify" shows bashrc OK:
+#   source ~/.bashrc
 #
-# --key-from HOST copies the house SSH key from HOST (needs SSH access to that
-# host first). Or set INIT_FILES_KEY_HOST. HTTPS: --github-https (with gh auth).
+# --key-from HOST copies the house SSH key from HOST (one SSH login). Or set
+# INIT_FILES_KEY_HOST. Do not source ~/.bashrc until verify succeeds.
 #
 # After clone exists, this script is idempotent. Keep the-hcma/init-files in sync
 # when this file changes.
