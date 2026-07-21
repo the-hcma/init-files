@@ -4,17 +4,14 @@
 # Preferred (public curl|bash — no prior clone required):
 #
 #   curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host | less
-#   curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host | bash
-#   curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host | bash -s -- --no-dev
+#   curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host | bash -s -- --key-from HOST
+#   curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host | bash -s -- --no-dev --key-from HOST
 #
-# Still needs the house SSH key on the host (or --github-https + gh auth) to clone
-# this private repo. Public mirror: https://github.com/the-hcma/init-files
+# --key-from HOST copies the house SSH key from HOST (needs SSH access to that
+# host first). Or set INIT_FILES_KEY_HOST. HTTPS: --github-https (with gh auth).
 #
-# scp fallback from a working host:
-#   scp WORKING:~/.local/share/init-files/bootstrap_host /tmp/ && /tmp/bootstrap_host
-#
-# After clone exists, this script in the clone is idempotent (skip clone, re-run
-# install + verify). Keep the public mirror in sync when this file changes.
+# After clone exists, this script is idempotent. Keep the-hcma/init-files in sync
+# when this file changes.
 #
 # See: https://github.com/thehcma/init-files/issues/12
 set -euo pipefail
@@ -30,6 +27,8 @@ ssh_github_snippet="${ssh_config_d}/init-files-github.conf"
 github_insteadof_from='https://github.com/'
 github_insteadof_to='git@github.com:'
 ssh_cache_timeout="${SSH_CACHE_TIMEOUT:-4h}"
+# Optional: host (or user@host) to scp the house key from before SSH bootstrap.
+key_from_host="${INIT_FILES_KEY_HOST:-}"
 
 force=0
 quiet=0
@@ -57,22 +56,31 @@ usage()
 {
     cat <<'EOF'
 Usage: bootstrap_host [-f|--force] [-q|--quiet] [--no-dev|--dev]
-                      [--github-https|--github-ssh] [-h|--help]
+                      [--github-https|--github-ssh]
+                      [--key-from HOST] [-h|--help]
 
-  New-host bootstrap for init-files (issue #12).
+  New-host bootstrap for init-files.
 
   SSH mode (default; or --github-ssh / remembered github-ssh.<host>):
-    require house key → GitHub SSH snippet + insteadOf + known_hosts →
-    cache key in agent → ssh -T → clone (if needed) → ./install → verify.
+    optional --key-from HOST → require house key → GitHub SSH snippet +
+    insteadOf + known_hosts → cache key → ssh -T → clone (if needed) →
+    ./install → verify.
+
+  --key-from HOST
+                scp the house key (+ .pub if present) from HOST onto this
+                machine. HOST may be a hostname or user@host. Requires SSH
+                access to HOST (password or existing key). Env alternative:
+                INIT_FILES_KEY_HOST.
 
   HTTPS mode (--github-https / remembered github-https.<host> / gh auth):
     skip key/cache_ssh/ssh -T → clone via HTTPS → ./install --github-https → verify.
 
-  Preferred fetch (public mirror):
-    curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host | bash
+  Preferred fetch:
+    curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host \
+      | bash -s -- --key-from HOST
 
-  Flags are forwarded to ./install. Clone path: ~/.local/share/init-files
-  (override with INIT_FILES_DIR).
+  Flags other than --key-from are forwarded to ./install.
+  Clone path: ~/.local/share/init-files (override with INIT_FILES_DIR).
 EOF
 }
 
@@ -111,6 +119,13 @@ while [[ $# -gt 0 ]]; do
             github_transport_explicit=1
             install_args+=("$1")
             shift
+            ;;
+        --key-from)
+            if [[ -z "${2:-}" || "$2" == -* ]]; then
+                die "--key-from requires a host (e.g. meerkat or hcma@meerkat)"
+            fi
+            key_from_host="$2"
+            shift 2
             ;;
         -h|--help)
             usage
@@ -373,19 +388,60 @@ verify_github_ssh()
     die "GitHub SSH auth failed. Confirm the pubkey is on the GitHub account, then: ssh-add -t ${ssh_cache_timeout} ${house_key} && ssh -T git@github.com"
 }
 
+
+# Copy house key (+ optional .pub) from a donor host onto this machine.
+fetch_house_key_from_host()
+{
+    local src_host="$1"
+    local remote_key remote_pub scp_cmd
+
+    [[ -n "$src_host" ]] || die "fetch_house_key_from_host: empty host"
+    require_cmd scp
+    require_cmd ssh
+
+    mkdir -p "$ssh_dir" || die "cannot create $ssh_dir"
+    chmod 700 "$ssh_dir" || true
+
+    remote_key="${src_host}:.ssh/id_rsa-sha2-256-hcma-at-hcma-dot-info"
+    remote_pub="${src_host}:.ssh/id_rsa-sha2-256-hcma-at-hcma-dot-info.pub"
+
+    if [[ -f "$house_key" && $force -eq 0 ]]; then
+        log "OK       house key already present; skip fetch from ${src_host} (use -f to overwrite)"
+        return 0
+    fi
+
+    log "Fetching house key from ${src_host} …"
+    log "         (needs SSH access to ${src_host} — password or an existing key)"
+    scp_cmd="$(command -v scp)"
+    "$scp_cmd" -p "$remote_key" "$house_key" \
+        || die "scp failed for ${remote_key}. Check SSH access to ${src_host}, then retry."
+    chmod 600 "$house_key" || true
+
+    if "$scp_cmd" -p "$remote_pub" "$house_pub" 2>/dev/null; then
+        chmod 644 "$house_pub" || true
+        log "OK       fetched key + pubkey from ${src_host}"
+    else
+        log "OK       fetched private key from ${src_host} (pubkey optional; skipped)"
+    fi
+}
+
 setup_ssh_mode()
 {
+    if [[ -n "$key_from_host" ]]; then
+        fetch_house_key_from_host "$key_from_host"
+    fi
+
     if [[ ! -f "$house_key" ]]; then
         cat >&2 <<EOF
 ERROR: missing house/GitHub SSH key: $house_key
 
-Copy from a working host, then re-run:
-  scp WORKING_HOST:~/.ssh/id_rsa-sha2-256-hcma-at-hcma-dot-info{,.pub} ${HOME}/.ssh/
-  chmod 700 ~/.ssh
-  chmod 600 ~/.ssh/id_rsa-sha2-256-hcma-at-hcma-dot-info
-  chmod 644 ~/.ssh/id_rsa-sha2-256-hcma-at-hcma-dot-info.pub
+Fetch it from a host that already has the key, then re-run:
+  curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host \
+    | bash -s -- --key-from HOST
+  # or:  bootstrap_host --key-from HOST
+  # HOST may be meerkat, saratoga, or user@host
 
-Or use HTTPS instead: $0 --github-https
+Or use HTTPS instead: bootstrap_host --github-https
 EOF
         exit 1
     fi
