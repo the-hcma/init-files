@@ -10,7 +10,7 @@ You need SSH access to a host that already has the house key (password login is 
 # Inspect first (recommended):
 curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host | less
 
-# Fetch the house key from HOST, then finish bootstrap:
+# Fetch the house key from HOST (one password), then finish bootstrap:
 curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host \
   | bash -s -- --key-from HOST
 ```
@@ -27,6 +27,10 @@ curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_
 
 `HOST` may be a short name, FQDN, or `user@host`. Equivalent env: `INIT_FILES_KEY_HOST=meerkat`.
 
+You will be prompted for:
+1. SSH password (or key) to `HOST` — once
+2. Passphrase for the house key — once (read from your terminal even under `curl | bash`)
+
 Then reload:
 
 ```bash
@@ -35,16 +39,9 @@ source ~/.bashrc
 
 ### What `--key-from` does
 
-On this machine it runs the equivalent of:
+Fetches `~/.ssh/id_rsa-sha2-256-hcma-at-hcma-dot-info` (+ `.pub` if present) from `HOST` in a **single** SSH session, starts `ssh-agent` if needed, caches the key, verifies GitHub SSH, clones/installs init-files, and prints a short verify summary. If the key is already on this host, fetch is skipped unless you pass `-f` / `--force`.
 
-```bash
-mkdir -p ~/.ssh && chmod 700 ~/.ssh
-scp -p HOST:.ssh/id_rsa-sha2-256-hcma-at-hcma-dot-info ~/.ssh/
-scp -p HOST:.ssh/id_rsa-sha2-256-hcma-at-hcma-dot-info.pub ~/.ssh/   # if present
-chmod 600 ~/.ssh/id_rsa-sha2-256-hcma-at-hcma-dot-info
-```
-
-Then it caches the key (`ssh-add`), verifies GitHub SSH, clones/installs init-files, and prints a short verify summary. If the key is already on this host, fetch is skipped unless you pass `-f` / `--force`.
+Requires OpenSSH client tools (`ssh`, `ssh-add`, `ssh-agent`, `scp`). If they are missing, the script prints an install command for your distro.
 
 ### Key already on this host
 
@@ -56,7 +53,7 @@ curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_
 
 | Flag | Meaning |
 | --- | --- |
-| `--key-from HOST` | scp house key from HOST (or `INIT_FILES_KEY_HOST`) |
+| `--key-from HOST` | fetch house key from HOST (or `INIT_FILES_KEY_HOST`) |
 | `--no-dev` / `--dev` | forwarded to install |
 | `--github-https` / `--github-ssh` | GitHub transport (optional; default is SSH via the house key) |
 | `-f` / `--force` | install force; also re-fetch key if `--key-from` is set |

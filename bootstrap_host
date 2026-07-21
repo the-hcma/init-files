@@ -67,8 +67,8 @@ Usage: bootstrap_host [-f|--force] [-q|--quiet] [--no-dev|--dev]
     ./install → verify.
 
   --key-from HOST
-                scp the house key (+ .pub if present) from HOST onto this
-                machine. HOST may be a hostname or user@host. Requires SSH
+                copy the house key (+ .pub if present) from HOST in one SSH
+                login. HOST may be a hostname or user@host. Requires SSH
                 access to HOST (password or existing key). Env alternative:
                 INIT_FILES_KEY_HOST.
 
@@ -200,6 +200,71 @@ require_cmd()
     command -v "$name" >/dev/null 2>&1 || die "$name is required but not on PATH"
 }
 
+# Hint when OpenSSH client tools are missing (ssh-agent / ssh-add / scp).
+openssh_client_install_hint()
+{
+    if [[ -r /etc/os-release ]]; then
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        case "${ID:-}" in
+            ubuntu|debian|linuxmint|pop)
+                printf 'sudo apt update && sudo apt install -y openssh-client'
+                return 0
+                ;;
+            rhel|centos|rocky|almalinux|fedora|amzn)
+                if command -v dnf >/dev/null 2>&1; then
+                    printf 'sudo dnf install -y openssh-clients'
+                else
+                    printf 'sudo yum install -y openssh-clients'
+                fi
+                return 0
+                ;;
+            arch|manjaro)
+                printf 'sudo pacman -S openssh'
+                return 0
+                ;;
+        esac
+    fi
+    if [[ "${OSTYPE:-}" == darwin* ]]; then
+        printf 'xcode-select --install   # Xcode CLT provides ssh-agent/ssh-add'
+        return 0
+    fi
+    printf 'install the OpenSSH client package (ssh, ssh-add, ssh-agent, scp)'
+}
+
+require_openssh_client()
+{
+    local missing=()
+    local tool
+    for tool in ssh ssh-add ssh-agent scp; do
+        command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
+    done
+    if [[ ${#missing[@]} -eq 0 ]]; then
+        return 0
+    fi
+    cat >&2 <<EOF
+ERROR: missing OpenSSH client tool(s): ${missing[*]}
+
+Install them, then re-run bootstrap_host:
+  $(openssh_client_install_hint)
+EOF
+    exit 1
+}
+
+# Prefer a real terminal for passphrase prompts (curl|bash leaves stdin as a pipe).
+bootstrap_tty()
+{
+    if [[ -r /dev/tty ]]; then
+        printf '/dev/tty'
+        return 0
+    fi
+    if [[ -t 0 ]]; then
+        printf '/dev/stdin'
+        return 0
+    fi
+    return 1
+}
+
 ensure_ssh_config_include()
 {
     local include_line='Include config.d/*.conf'
@@ -308,15 +373,16 @@ clear_github_ssh_insteadof()
     fi
 }
 
-# Minimal cache_ssh: agent + ssh-add -t (TTY required for passphrase).
+# Minimal cache_ssh: agent + ssh-add -t (passphrase via /dev/tty when possible).
 cache_house_key()
 {
-    local ssh_add_cmd ssh_agent_cmd ssh_keygen_cmd env_file agent_rc fingerprint key_loaded
+    local ssh_add_cmd ssh_agent_cmd ssh_keygen_cmd env_file agent_rc fingerprint key_loaded tty_dev agent_out
 
-    ssh_add_cmd="$(command -v ssh-add 2>/dev/null || true)"
-    ssh_agent_cmd="$(command -v ssh-agent 2>/dev/null || true)"
+    require_openssh_client
+
+    ssh_add_cmd="$(command -v ssh-add)"
+    ssh_agent_cmd="$(command -v ssh-agent)"
     ssh_keygen_cmd="$(command -v ssh-keygen 2>/dev/null || true)"
-    [[ -n "$ssh_add_cmd" ]] || die "ssh-add not found"
     env_file="${HOME}/.ssh/environment"
 
     agent_rc=0
@@ -327,29 +393,38 @@ cache_house_key()
     fi
 
     if [[ $agent_rc -eq 2 ]]; then
-        if [[ "${OSTYPE:-}" == darwin* ]]; then
-            [[ -n "$ssh_agent_cmd" ]] || die "ssh-agent not found"
-            eval "$("$ssh_agent_cmd" -s)" >/dev/null
-        else
-            if [[ -f "$env_file" ]]; then
-                # shellcheck disable=SC1090
-                . "$env_file" >/dev/null
-                "$ssh_add_cmd" -l &>/dev/null || agent_rc=$?
-            fi
-            if [[ $agent_rc -eq 2 ]]; then
-                [[ -n "$ssh_agent_cmd" ]] || die "ssh-agent not found"
-                eval "$("$ssh_agent_cmd" -s)" >/dev/null
-                # Persist for later Linux shells (install/bashrc may refresh).
-                {
-                    printf 'SSH_AUTH_SOCK=%q; export SSH_AUTH_SOCK;\n' "${SSH_AUTH_SOCK:-}"
-                    printf 'SSH_AGENT_PID=%q; export SSH_AGENT_PID;\n' "${SSH_AGENT_PID:-}"
-                } > "$env_file" 2>/dev/null || true
-                chmod 600 "$env_file" 2>/dev/null || true
-            fi
+        if [[ -f "$env_file" ]]; then
+            # shellcheck disable=SC1090
+            . "$env_file" >/dev/null || true
+            agent_rc=0
+            "$ssh_add_cmd" -l &>/dev/null || agent_rc=$?
         fi
     fi
 
-    "$ssh_add_cmd" -l &>/dev/null || die "ssh-agent is not available"
+    if [[ $agent_rc -eq 2 ]]; then
+        log "Starting ssh-agent …"
+        agent_out="$("$ssh_agent_cmd" -s)" || die "failed to start ssh-agent"
+        # shellcheck disable=SC2086
+        eval "$agent_out" >/dev/null
+        {
+            printf 'SSH_AUTH_SOCK=%q; export SSH_AUTH_SOCK;\n' "${SSH_AUTH_SOCK:-}"
+            printf 'SSH_AGENT_PID=%q; export SSH_AGENT_PID;\n' "${SSH_AGENT_PID:-}"
+        } > "$env_file" 2>/dev/null || true
+        chmod 600 "$env_file" 2>/dev/null || true
+        agent_rc=0
+        "$ssh_add_cmd" -l &>/dev/null || agent_rc=$?
+    fi
+
+    # ssh-add -l: 0 = has keys, 1 = agent up but empty, 2 = no agent.
+    if [[ $agent_rc -eq 2 ]]; then
+        cat >&2 <<EOF
+ERROR: ssh-agent is not available (cannot connect via SSH_AUTH_SOCK=${SSH_AUTH_SOCK:-unset}).
+
+Install/fix OpenSSH client, then re-run:
+  $(openssh_client_install_hint)
+EOF
+        exit 1
+    fi
 
     key_loaded=0
     if [[ -n "$ssh_keygen_cmd" ]]; then
@@ -364,14 +439,19 @@ cache_house_key()
         return 0
     fi
 
-    if [[ ! -t 0 || ! -t 2 ]]; then
-        die "passphrase required; run bootstrap_host from an interactive terminal (or: ssh-add -t ${ssh_cache_timeout} ${house_key})"
+    if ! tty_dev="$(bootstrap_tty)"; then
+        die "passphrase required but no TTY; run from a real terminal (not a non-interactive pipe without /dev/tty)"
     fi
 
     log "Caching SSH key: $house_key (timeout: $ssh_cache_timeout)"
-    env -u DISPLAY -u SSH_ASKPASS SSH_ASKPASS_REQUIRE=never \
-        "$ssh_add_cmd" -t "$ssh_cache_timeout" "$house_key" \
-        || die "ssh-add failed"
+    log "         Enter the key passphrase when prompted."
+    # curl|bash leaves stdin as the script pipe — read passphrase from the TTY.
+    if ! env -u DISPLAY -u SSH_ASKPASS SSH_ASKPASS_REQUIRE=never \
+        "$ssh_add_cmd" -t "$ssh_cache_timeout" "$house_key" <"$tty_dev"
+    then
+        die "ssh-add failed (wrong passphrase, or agent issue)"
+    fi
+    log "OK       house key cached in ssh-agent"
 }
 
 verify_github_ssh()
@@ -389,39 +469,50 @@ verify_github_ssh()
 }
 
 
-# Copy house key (+ optional .pub) from a donor host onto this machine.
+# Copy house key (+ optional .pub) from a donor host in one SSH auth (one password).
 fetch_house_key_from_host()
 {
     local src_host="$1"
-    local remote_key remote_pub scp_cmd
+    local key_basename="id_rsa-sha2-256-hcma-at-hcma-dot-info"
+    local remote_script
 
     [[ -n "$src_host" ]] || die "fetch_house_key_from_host: empty host"
-    require_cmd scp
-    require_cmd ssh
+    require_openssh_client
 
     mkdir -p "$ssh_dir" || die "cannot create $ssh_dir"
     chmod 700 "$ssh_dir" || true
-
-    remote_key="${src_host}:.ssh/id_rsa-sha2-256-hcma-at-hcma-dot-info"
-    remote_pub="${src_host}:.ssh/id_rsa-sha2-256-hcma-at-hcma-dot-info.pub"
 
     if [[ -f "$house_key" && $force -eq 0 ]]; then
         log "OK       house key already present; skip fetch from ${src_host} (use -f to overwrite)"
         return 0
     fi
 
-    log "Fetching house key from ${src_host} …"
+    log "Fetching house key from ${src_host} (single SSH login) …"
     log "         (needs SSH access to ${src_host} — password or an existing key)"
-    scp_cmd="$(command -v scp)"
-    "$scp_cmd" -p "$remote_key" "$house_key" \
-        || die "scp failed for ${remote_key}. Check SSH access to ${src_host}, then retry."
-    chmod 600 "$house_key" || true
 
-    if "$scp_cmd" -p "$remote_pub" "$house_pub" 2>/dev/null; then
+    # One ssh connection: stream key (+ pub if present) as a tar to avoid two scp passwords.
+    remote_script=$(cat <<EOF
+set -e
+cd "\${HOME}/.ssh" || exit 1
+test -f ${key_basename} || { echo "missing ~/.ssh/${key_basename} on remote" >&2; exit 1; }
+if test -f ${key_basename}.pub; then
+  tar cf - ${key_basename} ${key_basename}.pub
+else
+  tar cf - ${key_basename}
+fi
+EOF
+)
+    # shellcheck disable=SC2029
+    if ! ssh -o ControlMaster=no "$src_host" "$remote_script" | tar -C "$ssh_dir" -xf -; then
+        die "failed to fetch house key from ${src_host}. Check SSH access, then retry."
+    fi
+    [[ -f "$house_key" ]] || die "fetch produced no $house_key"
+    chmod 600 "$house_key" || true
+    if [[ -f "$house_pub" ]]; then
         chmod 644 "$house_pub" || true
         log "OK       fetched key + pubkey from ${src_host}"
     else
-        log "OK       fetched private key from ${src_host} (pubkey optional; skipped)"
+        log "OK       fetched private key from ${src_host} (no pubkey on remote)"
     fi
 }
 
