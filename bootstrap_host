@@ -17,7 +17,7 @@
 #
 # See: https://github.com/thehcma/init-files/issues/12
 set -euo pipefail
-# bootstrap_host_rev=ed25519-only-ssh-2026-07-22
+# bootstrap_host_rev=ed25519-only-ssh-2026-07-22b
 
 clone_dir="${INIT_FILES_DIR:-$HOME/.local/share/init-files}"
 repo_https="${INIT_FILES_REPO_HTTPS:-https://github.com/thehcma/init-files.git}"
@@ -276,11 +276,11 @@ ensure_ssh_config_include()
     local include_line='Include config.d/*.conf'
     local tmp
 
-    mkdir -p "$ssh_config_d" || return 1
+    mkdir -p "$ssh_config_d" || die "cannot create $ssh_config_d"
     chmod 700 "$ssh_dir" || true
 
     if [[ ! -f "$ssh_config_file" ]]; then
-        printf '%s\n' "$include_line" > "$ssh_config_file" || return 1
+        printf '%s\n' "$include_line" > "$ssh_config_file" || die "cannot write $ssh_config_file"
         chmod 600 "$ssh_config_file" || true
         log "Created  ~/.ssh/config with Include config.d/*.conf"
         return 0
@@ -290,17 +290,17 @@ ensure_ssh_config_include()
         return 0
     fi
 
-    tmp=$(mktemp) || return 1
+    tmp=$(mktemp) || die "mktemp failed"
     {
         printf '%s\n\n' "$include_line"
         cat "$ssh_config_file"
     } > "$tmp" || {
         rm -f "$tmp"
-        return 1
+        die "cannot prepend Include to $ssh_config_file"
     }
     cp "$tmp" "$ssh_config_file" || {
         rm -f "$tmp"
-        return 1
+        die "cannot update $ssh_config_file"
     }
     rm -f "$tmp"
     chmod 600 "$ssh_config_file" || true
@@ -333,7 +333,7 @@ write_github_ssh_snippet()
     local alg_line="" id
     local -a ids=()
 
-    mkdir -p "$ssh_config_d" || return 1
+    mkdir -p "$ssh_config_d" || die "cannot create $ssh_config_d"
 
     if [[ "${github_key:-}" == "$github_ed25519_key" ]]; then
         [[ -f "$github_ed25519_key" ]] && ids+=("$github_ed25519_key")
@@ -345,8 +345,7 @@ write_github_ssh_snippet()
     fi
 
     if ((${#ids[@]} == 0)); then
-        log "WARN     no GitHub SSH keys on disk; skip ${ssh_github_snippet/#$HOME/~}"
-        return 1
+        die "no GitHub SSH keys on disk ($house_key or $github_ed25519_key)"
     fi
 
     if [[ " ${ids[*]} " == *" $house_key "* ]]; then
@@ -366,9 +365,9 @@ write_github_ssh_snippet()
         done
         printf '%s' "$alg_line"
         printf '%s\n' '    IdentitiesOnly yes' '    VisualHostKey no'
-    } > "$ssh_github_snippet"
+    } > "$ssh_github_snippet" || die "cannot write $ssh_github_snippet"
     chmod 600 "$ssh_github_snippet" || true
-    log "Installed ${ssh_github_snippet/#$HOME/~} (keys: ${ids[*]/#$HOME/~})"
+    log "Installed ${ssh_github_snippet/#$HOME/~} (keys: ${ids[*]})"
 }
 
 ensure_github_known_hosts()
@@ -830,6 +829,9 @@ print_verify_summary()
 }
 
 # --- main --------------------------------------------------------------------
+
+printf 'bootstrap_host (%s) starting on %s…\n' \
+    "ed25519-only-ssh-2026-07-22b" "${init_files_host}"
 
 if [[ $github_https -eq 1 ]]; then
     log "Mode:    HTTPS GitHub on ${init_files_host}"

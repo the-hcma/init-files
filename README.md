@@ -4,7 +4,7 @@ Entrypoint for bootstrapping house shell config on a new machine.
 
 Private config lives in [`thehcma/init-files`](https://github.com/thehcma/init-files). This public repo only mirrors `bootstrap_host` so a fresh machine can download it without already having the clone.
 
-Mirrored from private `main` at `158aa1e` (ed25519-only SSH hosts + IdentityFile filtering).
+Mirrored from private `main` at `c1a4e14` (ed25519-only SSH hosts + IdentityFile filtering).
 
 ## Exact steps (new host)
 
