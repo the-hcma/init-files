@@ -2,13 +2,15 @@
 
 Entrypoint for bootstrapping house shell config on a new machine.
 
+Private config lives in [`thehcma/init-files`](https://github.com/thehcma/init-files). This public repo only mirrors `bootstrap_host` so a fresh machine can download it without already having the clone.
+
 ## Exact steps (new host)
 
 You need SSH access to a donor host that already has the house key (password login is fine once).
 
 ```bash
 # 1) Download the script (preferred over curl|bash — clearer errors, no stale pipe)
-curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/1d37d1182beb2574717111ae22b6cbcf3d25c795/bootstrap_host \
+curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/2f67b348749158f1db2a57f885602939475c3f0c/bootstrap_host \
   -o /tmp/bootstrap_host
 chmod +x /tmp/bootstrap_host
 
@@ -43,7 +45,7 @@ ls -l ~/.bashrc
 
 ls -ld ~/.local/share/init-files/.git
 git -C ~/.local/share/init-files rev-parse --short HEAD
-type refresh_bashrc
+type refresh_init_files
 ```
 
 ### Examples
@@ -54,14 +56,14 @@ type refresh_bashrc
 /tmp/bootstrap_host --key-from hcma@saratoga
 ```
 
-HOST may be a short name, FQDN, or user@host. Env alternative: INIT_FILES_KEY_HOST=meerkat.
+HOST may be a short name, FQDN, or user@host. Env alternative: `INIT_FILES_KEY_HOST=meerkat`.
 
 ### Key already on this host
 
 If a previous attempt already copied the key (common after a partial run):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/1d37d1182beb2574717111ae22b6cbcf3d25c795/bootstrap_host \
+curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/2f67b348749158f1db2a57f885602939475c3f0c/bootstrap_host \
   -o /tmp/bootstrap_host
 chmod +x /tmp/bootstrap_host
 /tmp/bootstrap_host
@@ -73,35 +75,43 @@ To re-fetch the key from the donor anyway: `/tmp/bootstrap_host --key-from HOST 
 
 ### curl|bash alternative
 
-Works if /dev/tty is available (normal interactive SSH/terminal):
+Works if `/dev/tty` is available (normal interactive SSH/terminal):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/1d37d1182beb2574717111ae22b6cbcf3d25c795/bootstrap_host \
+curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/2f67b348749158f1db2a57f885602939475c3f0c/bootstrap_host \
   | bash -s -- --key-from HOST
 # after verify OK:
 source ~/.bashrc
 ```
 
-Downloading to /tmp/bootstrap_host is still preferred when debugging.
+Downloading to `/tmp/bootstrap_host` is still preferred when debugging.
 
-### What --key-from does
+### What `--key-from` does
 
-Fetches ~/.ssh/id_rsa-sha2-256-hcma-at-hcma-dot-info (+ .pub if present) from HOST in one SSH session, starts ssh-agent if needed, caches the key, verifies GitHub SSH, clones/installs init-files under ~/.local/share/init-files, and prints the verify summary.
+Fetches `~/.ssh/id_rsa-sha2-256-hcma-at-hcma-dot-info` (+ `.pub` if present) from HOST in one SSH session, starts ssh-agent if needed, caches the key, verifies GitHub SSH, clones under `~/.local/share/init-files`, runs `provision_init_files`, and prints the verify summary.
 
-Requires OpenSSH client tools (ssh, ssh-add, ssh-agent, scp). If missing, the script prints a distro install command.
+Requires OpenSSH client tools (`ssh`, `ssh-add`, `ssh-agent`, `scp`). If missing, the script prints a distro install command.
 
 ### Flags
 
 | Flag | Meaning |
 | --- | --- |
-| --key-from HOST | fetch house key from HOST (or INIT_FILES_KEY_HOST) |
-| --no-dev / --dev | forwarded to install |
-| --github-https / --github-ssh | GitHub transport (optional; default is SSH via the house key) |
-| -f / --force | install force; also re-fetch key if --key-from is set |
-| -q / --quiet | less output |
+| `--key-from HOST` | fetch house key from HOST (or `INIT_FILES_KEY_HOST`) |
+| `--no-dev` / `--dev` | forwarded to `provision_init_files` |
+| `--github-https` / `--github-ssh` | GitHub transport (optional; default is SSH via the house key) |
+| `-f` / `--force` | provision force; also re-fetch key if `--key-from` is set |
+| `-q` / `--quiet` | less output |
 
 ```bash
 /tmp/bootstrap_host --help
+```
+
+After bootstrap, day-to-day updates:
+
+```bash
+refresh_init_files              # pull main + always provision
+refresh_init_files --no-dev     # switch this host to non-dev
+~/.local/share/init-files/provision_init_files   # tools/ssh/vim only
 ```
 
 ### GitHub Permission denied (publickey)
@@ -116,13 +126,13 @@ ssh -v -o User=git -o IdentitiesOnly=yes \
 
 Typical causes:
 
-1. **Old OpenSSH** (common on Rocky/CentOS) — GitHub requires RSA SHA-2 signatures. Upgrade openssh-clients / openssh-client, then retry /tmp/bootstrap_host.
-2. **Pubkey not on GitHub** — the matching .pub must be on the GitHub account that can read init-files (Settings → SSH keys). Compare fingerprints with: `ssh-keygen -lf ~/.ssh/id_rsa-sha2-256-hcma-at-hcma-dot-info`
+1. **Old OpenSSH** (common on Rocky/CentOS) — GitHub requires RSA SHA-2 signatures. Prefer `~/.ssh/id_ed25519_github` when present (`cache_ssh ~/.ssh/id_ed25519_github`), or upgrade `openssh-clients` / `openssh-client`, then retry `/tmp/bootstrap_host`.
+2. **Pubkey not on GitHub** — the matching `.pub` must be on the GitHub account that can read init-files (Settings → SSH keys). Compare fingerprints with: `ssh-keygen -lf ~/.ssh/id_rsa-sha2-256-hcma-at-hcma-dot-info`
 
 Re-download bootstrap after upgrading OpenSSH or fixing the pubkey:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/1d37d1182beb2574717111ae22b6cbcf3d25c795/bootstrap_host \
+curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/2f67b348749158f1db2a57f885602939475c3f0c/bootstrap_host \
   -o /tmp/bootstrap_host
 chmod +x /tmp/bootstrap_host
 /tmp/bootstrap_host

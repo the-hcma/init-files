@@ -42,7 +42,7 @@ no_dev=0
 dev_mode_explicit=0
 github_https=0
 github_transport_explicit=0
-# Args forwarded to ./install (built while parsing).
+# Args forwarded to ./provision_init_files (built while parsing).
 install_args=()
 
 tools_dir="${XDG_CONFIG_HOME:-$HOME/.config}/init-files"
@@ -70,7 +70,7 @@ Usage: bootstrap_host [-f|--force] [-q|--quiet] [--no-dev|--dev]
   SSH mode (default; or --github-ssh / remembered github-ssh.<host>):
     optional --key-from HOST → require house key → GitHub SSH snippet +
     insteadOf + known_hosts → cache key → ssh -T → clone (if needed) →
-    ./install → verify.
+    ./provision_init_files → verify.
 
   --key-from HOST
                 copy the house key (+ .pub if present) from HOST in one SSH
@@ -79,13 +79,13 @@ Usage: bootstrap_host [-f|--force] [-q|--quiet] [--no-dev|--dev]
                 INIT_FILES_KEY_HOST.
 
   HTTPS mode (--github-https / remembered github-https.<host> / gh auth):
-    skip key/cache_ssh/ssh -T → clone via HTTPS → ./install --github-https → verify.
+    skip key/cache_ssh/ssh -T → clone via HTTPS → ./provision_init_files --github-https → verify.
 
   Preferred fetch:
     curl -fsSL https://raw.githubusercontent.com/the-hcma/init-files/main/bootstrap_host \
       | bash -s -- --key-from HOST
 
-  Flags other than --key-from are forwarded to ./install.
+  Flags other than --key-from are forwarded to ./provision_init_files.
   Clone path: ~/.local/share/init-files (override with INIT_FILES_DIR).
 EOF
 }
@@ -344,7 +344,7 @@ write_github_ssh_snippet()
 
     cat > "$ssh_github_snippet" <<EOF
 # Managed by init-files bootstrap_host (mirrors ssh/config.github).
-# ./install may refresh this file from the clone.
+# provision_init_files may refresh this file from the clone.
 
 Host github.com
     HostName github.com
@@ -722,7 +722,7 @@ clone_repo_if_needed()
 
 run_install()
 {
-    local install_bin="${clone_dir}/install"
+    local install_bin="${clone_dir}/provision_init_files"
     [[ -x "$install_bin" ]] || die "missing executable $install_bin"
 
     log "Running  $install_bin ${install_args[*]:-}"
